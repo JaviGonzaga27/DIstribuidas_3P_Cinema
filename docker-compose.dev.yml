@@ -1,0 +1,332 @@
+# Docker Compose para Cinema API - Configuración de Desarrollo con Seguridad
+# Sistema híbrido: Administradores + Clientes
+
+services:
+  # Base de datos PostgreSQL
+  db:
+    image: postgres:16
+    container_name: apicinema-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./insert_initial_data.sql:/insert_initial_data.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - cinema-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Message Broker RabbitMQ
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: apicinema-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-guest}
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    networks:
+      - cinema-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Administrador de Base de Datos
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: apicinema-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - cinema-network
+    restart: unless-stopped
+
+  # Servicio de Autenticación
+  auth-api:
+    build:
+      context: .
+      dockerfile: services/Auth/Auth.API/Dockerfile
+    container_name: apicinema-auth-api
+    ports:
+      - "5001:80"
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      # Base de datos
+      AUTH_DB_CONNECTION: Host=db;Port=5432;Database=auth;Username=postgres;Password=${DB_PASSWORD:-postgres}
+      
+      # RabbitMQ
+      RABBITMQ_URI: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guest}
+      
+      # JWT Configuration
+      JWT_SECRET: ${JWT_SECRET:-ClaveUltraSeguraYSecretaParaJWT2025!}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-OtroSecretoSuperLargoYSeguro123!}
+      JWT_ISSUER: ${JWT_ISSUER:-api-cinema-auth}
+      JWT_EXPIRATION_MINUTES: ${JWT_EXPIRATION_MINUTES:-180}
+      JWT_REFRESH_EXPIRATION_DAYS: ${JWT_REFRESH_EXPIRATION_DAYS:-7}
+      
+      # Configuración de seguridad
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ENABLE_FIRST_ADMIN_SETUP: ${ENABLE_FIRST_ADMIN_SETUP:-true}
+      
+    networks:
+      - cinema-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Servicio de Usuarios
+  users-api:
+    build:
+      context: .
+      dockerfile: services/Users/Users.API/Dockerfile
+    container_name: apicinema-users-api
+    ports:
+      - "5002:80"
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      AUTH_DB_CONNECTION: Host=db;Port=5432;Database=users;Username=postgres;Password=${DB_PASSWORD:-postgres}
+      RABBITMQ_URI: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guest}
+      JWT_SECRET: ${JWT_SECRET:-ClaveUltraSeguraYSecretaParaJWT2025!}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-OtroSecretoSuperLargoYSeguro123!}
+      JWT_ISSUER: ${JWT_ISSUER:-api-cinema-auth}
+      JWT_EXPIRATION_MINUTES: ${JWT_EXPIRATION_MINUTES:-180}
+      JWT_REFRESH_EXPIRATION_DAYS: ${JWT_REFRESH_EXPIRATION_DAYS:-7}
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+    networks:
+      - cinema-network
+    restart: unless-stopped
+
+  # Servicio de Películas
+  movies-api:
+    build:
+      context: .
+      dockerfile: services/Movies/Movies.API/Dockerfile
+    container_name: apicinema-movies-api
+    ports:
+      - "5003:80"
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      AUTH_DB_CONNECTION: Host=db;Port=5432;Database=movies;Username=postgres;Password=${DB_PASSWORD:-postgres}
+      RABBITMQ_URI: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guest}
+      JWT_SECRET: ${JWT_SECRET:-ClaveUltraSeguraYSecretaParaJWT2025!}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-OtroSecretoSuperLargoYSeguro123!}
+      JWT_ISSUER: ${JWT_ISSUER:-api-cinema-auth}
+      JWT_EXPIRATION_MINUTES: ${JWT_EXPIRATION_MINUTES:-180}
+      JWT_REFRESH_EXPIRATION_DAYS: ${JWT_REFRESH_EXPIRATION_DAYS:-7}
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+    networks:
+      - cinema-network
+    restart: unless-stopped
+
+  # Servicio de Catálogo
+  catalog-api:
+    build:
+      context: .
+      dockerfile: services/Catalog/Catalog.API/Dockerfile
+    container_name: apicinema-catalog-api
+    ports:
+      - "5004:80"
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      AUTH_DB_CONNECTION: Host=db;Port=5432;Database=catalog;Username=postgres;Password=${DB_PASSWORD:-postgres}
+      RABBITMQ_URI: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guest}
+      JWT_SECRET: ${JWT_SECRET:-ClaveUltraSeguraYSecretaParaJWT2025!}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-OtroSecretoSuperLargoYSeguro123!}
+      JWT_ISSUER: ${JWT_ISSUER:-api-cinema-auth}
+      JWT_EXPIRATION_MINUTES: ${JWT_EXPIRATION_MINUTES:-180}
+      JWT_REFRESH_EXPIRATION_DAYS: ${JWT_REFRESH_EXPIRATION_DAYS:-7}
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+    networks:
+      - cinema-network
+    restart: unless-stopped
+
+  # Servicio de Reservas
+  bookings-api:
+    build:
+      context: .
+      dockerfile: services/Bookings/Bookings.API/Dockerfile
+    container_name: apicinema-bookings-api
+    ports:
+      - "5005:80"
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      AUTH_DB_CONNECTION: Host=db;Port=5432;Database=bookings;Username=postgres;Password=${DB_PASSWORD:-postgres}
+      RABBITMQ_URI: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guest}
+      JWT_SECRET: ${JWT_SECRET:-ClaveUltraSeguraYSecretaParaJWT2025!}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-OtroSecretoSuperLargoYSeguro123!}
+      JWT_ISSUER: ${JWT_ISSUER:-api-cinema-auth}
+      JWT_EXPIRATION_MINUTES: ${JWT_EXPIRATION_MINUTES:-180}
+      JWT_REFRESH_EXPIRATION_DAYS: ${JWT_REFRESH_EXPIRATION_DAYS:-7}
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+    networks:
+      - cinema-network
+    restart: unless-stopped
+
+  # Servicio de Reseñas
+  reviews-api:
+    build:
+      context: .
+      dockerfile: services/Reviews/Reviews.API/Dockerfile
+    container_name: apicinema-reviews-api
+    ports:
+      - "5006:80"
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      AUTH_DB_CONNECTION: Host=db;Port=5432;Database=reviews;Username=postgres;Password=${DB_PASSWORD:-postgres}
+      RABBITMQ_URI: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guest}
+      JWT_SECRET: ${JWT_SECRET:-ClaveUltraSeguraYSecretaParaJWT2025!}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-OtroSecretoSuperLargoYSeguro123!}
+      JWT_ISSUER: ${JWT_ISSUER:-api-cinema-auth}
+      JWT_EXPIRATION_MINUTES: ${JWT_EXPIRATION_MINUTES:-180}
+      JWT_REFRESH_EXPIRATION_DAYS: ${JWT_REFRESH_EXPIRATION_DAYS:-7}
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+    networks:
+      - cinema-network
+    restart: unless-stopped
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: .
+      dockerfile: gateway/API.Gateway/Dockerfile
+    container_name: apicinema-api-gateway
+    ports:
+      - "5000:8080"
+    depends_on:
+      auth-api:
+        condition: service_healthy
+      users-api:
+        condition: service_started
+      movies-api:
+        condition: service_started
+      catalog-api:
+        condition: service_started
+      bookings-api:
+        condition: service_started
+      reviews-api:
+        condition: service_started
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      # URLs de servicios internos
+      AUTH_SERVICE_URL: http://auth-api:80
+      USERS_SERVICE_URL: http://users-api:80
+      MOVIES_SERVICE_URL: http://movies-api:80
+      CATALOG_SERVICE_URL: http://catalog-api:80
+      BOOKINGS_SERVICE_URL: http://bookings-api:80
+      REVIEWS_SERVICE_URL: http://reviews-api:80
+    networks:
+      - cinema-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend Next.js
+  frontend:
+    build:
+      context: ./services/Frontend/frontend-app
+      dockerfile: DockerFile
+    container_name: apicinema-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    environment:
+      # URLs de servicios
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5000}
+      NEXT_PUBLIC_AUTH_API_URL: ${NEXT_PUBLIC_AUTH_API_URL:-http://localhost:5001}
+      
+      # Configuración del cliente
+      NEXT_PUBLIC_ENABLE_CLIENT_REGISTRATION: ${ENABLE_CLIENT_REGISTRATION:-true}
+      NEXT_PUBLIC_CINEMA_NAME: ${CINEMA_NAME:-Cinema API}
+      
+      # Configuración de desarrollo
+      NODE_ENV: ${NODE_ENV:-development}
+    networks:
+      - cinema-network
+    restart: unless-stopped
+
+# Red personalizada para comunicación entre servicios
+networks:
+  cinema-network:
+    driver: bridge
+    name: cinema-network
+
+# Volúmenes persistentes
+volumes:
+  postgres_data:
+    name: cinema_postgres_data
